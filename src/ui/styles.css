@@ -1263,6 +1263,66 @@ body:has(.welcome-shell), body:has(.builder-entering) { overflow-x: clip; }
 @media (max-height: 600px) {
   .saved-character-scroll { max-height: 55svh; min-height: 140px; }
 }
+/* Two-column welcome stays within the window; only its content panels scroll.
+   The stacked layout below uses the document as its single scroll surface. */
+@media (min-width: 901px) {
+  body:has(.welcome-shell) { overflow-y: hidden; }
+  .welcome-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+  }
+  .welcome-shell > .site-header { flex-shrink: 0; }
+  .welcome-screen { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+  .welcome-screen > :not(.welcome-layout, .welcome-atmosphere) { flex-shrink: 0; }
+  .welcome-layout {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    padding-block: clamp(12px, 3dvh, 36px);
+  }
+  .welcome-copy {
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 8px;
+    margin-inline: -8px;
+    scrollbar-gutter: stable;
+  }
+  .welcome-start {
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    min-height: 0;
+    padding-inline: 16px;
+    margin-inline: -16px;
+  }
+  .welcome-start > :is(.eyebrow, h2, .welcome-loading) { flex-shrink: 0; }
+  .welcome-options {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scroll-padding-block: 16px;
+    padding: 16px;
+    margin: -16px;
+  }
+  .saved-character-panel { display: flex; flex-direction: column; min-height: 0; }
+  .saved-character-heading { flex-shrink: 0; }
+  .saved-character-scroll { min-height: 0; max-height: none; }
+}
+@media (max-width: 900px) {
+  .welcome-shell .saved-character-scroll {
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+    overscroll-behavior-y: auto;
+    scrollbar-gutter: auto;
+    mask-image: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .saved-character-panel { animation: none; }
   .saved-character-open,
