@@ -2,6 +2,20 @@
 
 A browser-only React and TypeScript character builder with nine guided stages, English/Croatian explanations, local drafts, JSON recovery, and the standard fillable character-sheet PDF. The visual design uses OLED black, warm gray surfaces, red-orange actions, amber selections, and white selected hover states. Exotic-language badges use a purple-to-cyan gradient. See [DESIGN.md](DESIGN.md) for the palette and sources.
 
+## Screenshots
+
+### Desktop
+
+The welcome message and starting options sit side by side.
+
+![Desktop welcome screen](docs/screenshots/welcome-desktop.jpg)
+
+### Mobile
+
+The welcome message sits above the options, with the whole page scrollable.
+
+<img src="docs/screenshots/welcome-mobile.jpg" alt="Mobile welcome screen showing the stacked layout and all four starting options" width="360" />
+
 ## Run
 
 Install Node.js and pnpm, then open a terminal in this folder:
