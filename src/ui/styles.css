@@ -1146,6 +1146,34 @@ body:has(.welcome-shell), body:has(.builder-entering) { overflow-x: clip; }
   .app-shell .choice-card--illustrated .choice-artwork { transition: none; }
 }
 
+/* Paint animated choice borders as one masked surface. Firefox can expose
+   seams between its native rounded-border segments under fractional scale. */
+@supports (mask-composite: exclude) {
+  .app-shell .choice-card {
+    border-color: transparent !important;
+    --choice-border-color: var(--border-control);
+    --choice-border-width: 1px;
+  }
+  .app-shell .choice-card:is(.choice-card--illustrated, .selected) { --choice-border-width: 2px; }
+  .app-shell .choice-card.selected { --choice-border-color: var(--outline-active); }
+  .app-shell .choice-card:hover:not(:disabled) { --choice-border-color: var(--accent-hover); }
+  .app-shell .choice-card--illustrated.selected,
+  .app-shell .choice-card--illustrated.selected:hover:not(:disabled) { --choice-border-color: var(--fill-selected); }
+  .app-shell .choice-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    padding: var(--choice-border-width);
+    border-radius: inherit;
+    background: var(--choice-border-color);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+    transition: background-color 200ms ease;
+  }
+}
+
 /* Saved character library: the welcome copy stays in place while the right
    panel changes. Only the scrollable cards receive the conditional edge fade. */
 .welcome-option,
