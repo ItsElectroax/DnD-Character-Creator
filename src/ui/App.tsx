@@ -3,6 +3,7 @@ import {
   ChangeEvent,
   ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -170,6 +171,11 @@ export function App({
     },
     [],
   );
+  useLayoutEffect(() => {
+    // Keep the completed exit applied until React has actually replaced the
+    // builder. Cancelling it before that commit can flash the old surface.
+    if (screen === "welcome") returnTransition.current?.();
+  }, [screen]);
   useEffect(() => {
     if (screen !== "builder") return;
     const frame = requestAnimationFrame(() => {
@@ -379,7 +385,9 @@ export function App({
     };
     const finish = () => {
       if (finished) return;
-      cleanup();
+      finished = true;
+      clearTimeout(timer);
+      preference.removeEventListener("change", changed);
       setReturning(false);
       setWelcomeView(view);
       // Unmounting the builder mounts a fresh welcome scene, replaying its
@@ -419,11 +427,17 @@ export function App({
       )
         ? -1
         : 1;
+      const visibleStyle = getComputedStyle(node);
+      const transform =
+        visibleStyle.transform === "none" ? "" : visibleStyle.transform;
       animations.push(
         node.animate(
           [
-            { opacity: 1, transform: "translate(0, 0)" },
-            { opacity: 0, transform: `translate(${direction * 18}px, -4px)` },
+            { opacity: visibleStyle.opacity, transform: transform || "none" },
+            {
+              opacity: 0,
+              transform: `${transform} translate(${direction * 18}px, -4px)`,
+            },
           ],
           { duration: 200, easing: "ease-in", fill: "forwards" },
         ),

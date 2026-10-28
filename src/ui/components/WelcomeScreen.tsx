@@ -515,7 +515,7 @@ export function WelcomeScreen({
   const panelRevision = useRef(0);
   const panelBusy = useRef(false);
   const panelExitCleanup = useRef<(() => void) | null>(null);
-  const firstPanelEntry = useRef(true);
+  const panelHasSwitched = useRef(false);
   const [panelPhase, setPanelPhase] = useState<"idle" | "entering" | "exiting">(
     "idle",
   );
@@ -537,13 +537,16 @@ export function WelcomeScreen({
   const [deletionNotice, setDeletionNotice] = useState("");
   const [view, setView] = useState(initialView);
   const [scrollEdges, setScrollEdges] = useState({ top: false, bottom: false });
-  useEffect(() => {
+  useLayoutEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
     (initialView === "saved" ? savedTitle.current : title.current)?.focus({
       preventScroll: true,
     });
   }, []);
-  useEffect(() => setView(initialView), [initialView]);
+  useEffect(() => {
+    if (initialView !== view) panelHasSwitched.current = true;
+    setView(initialView);
+  }, [initialView]);
   const panelTargets = () => {
     const panel = startPanel.current;
     if (!panel) return [];
@@ -565,8 +568,9 @@ export function WelcomeScreen({
     const panel = startPanel.current;
     if (!panel) return;
     const ticket = ++panelRevision.current;
-    const intro = firstPanelEntry.current;
-    firstPanelEntry.current = false;
+    // Effect setup is replayed in development StrictMode. Only a real panel
+    // switch ends the intro; an effect rehearsal must not change its timing.
+    const intro = !panelHasSwitched.current;
     panelAnimations.current.forEach((animation) => animation.cancel());
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     let finished = false;
@@ -819,6 +823,7 @@ export function WelcomeScreen({
       if (finished || panelRevision.current !== ticket) return;
       finished = true;
       cleanup();
+      panelHasSwitched.current = true;
       setView(next);
     };
     const changed = () => {
