@@ -42,7 +42,7 @@ function render({
         onPDF: noAction,
         savedCharacters,
         onOpenSaved: noAction,
-        onDeleteSaved: noAction,
+        onDeleteSaved: () => true,
         initialView,
         leaving: false,
         loading: false,

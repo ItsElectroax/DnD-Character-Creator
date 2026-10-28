@@ -88,7 +88,6 @@ export function App({
     Math.max(0, c.stage, c.visitedThrough || 0, ...c.confirmed),
   );
   const [pendingPDF, setPendingPDF] = useState<PDFImport | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [acceptedPDFFields, setAcceptedPDFFields] = useState<string[]>([]);
   const acceptingPDF = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -209,11 +208,9 @@ export function App({
     document.documentElement.lang = locale;
   }, [locale]);
   useEffect(() => {
-    if (!pendingPDF && !pendingDeleteId) return;
+    if (!pendingPDF) return;
     const previous = document.activeElement as HTMLElement | null;
-    const dialog = document.querySelector<HTMLElement>(
-      pendingDeleteId ? ".delete-review" : ".import-review",
-    );
+    const dialog = document.querySelector<HTMLElement>(".import-review");
     const controls = () =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
@@ -225,7 +222,6 @@ export function App({
       if (event.key === "Escape") {
         if (acceptingPDF.current) return;
         setPendingPDF(null);
-        setPendingDeleteId(null);
       }
       if (event.key === "Tab") {
         const list = controls();
@@ -245,7 +241,7 @@ export function App({
       document.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [pendingPDF, pendingDeleteId]);
+  }, [pendingPDF]);
   const d = useMemo(() => derive(c), [c]);
   const errs = validateStage(c);
   const allIssues = validateBuild(c);
@@ -345,18 +341,14 @@ export function App({
     setScreen("welcome");
   };
   const showSaved = () => showWelcome("saved");
-  const deleteSaved = (id: string) => {
-    if (libraryRef.current.entries.some((item) => item.id === id))
-      setPendingDeleteId(id);
-  };
-  const confirmDelete = () => {
-    const id = pendingDeleteId;
-    if (!id) return;
+  const deleteSaved = (id: string): boolean => {
+    if (!libraryRef.current.entries.some((item) => item.id === id))
+      return false;
     const wasActive = libraryRef.current.activeId === id;
     if (!commitLibrary(deleteLibraryCharacter(libraryRef.current, id), true))
-      return;
+      return false;
     if (wasActive) setC(initialCharacter());
-    setPendingDeleteId(null);
+    return true;
   };
   const savedCharacters = useMemo(
     () =>
@@ -648,42 +640,6 @@ export function App({
           <button className="quiet-button" onClick={exportCharacter}>
             Export JSON
           </button>
-        </div>
-      )}
-      {pendingDeleteId && (
-        <div
-          className="import-review delete-review"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-character-title"
-          aria-describedby="delete-character-description"
-        >
-          <div className="detail-panel">
-            <h2 id="delete-character-title">Delete character?</h2>
-            <p data-player-text>
-              {library.entries.find((entry) => entry.id === pendingDeleteId)
-                ?.character.identity.name || t("Unnamed character")}
-            </p>
-            <p id="delete-character-description">
-              This removes the character from this browser. Exported files are
-              unchanged.
-            </p>
-            {libraryError && <p role="alert">{libraryError}</p>}
-            <div className="button-row">
-              <button
-                className="quiet-button"
-                onClick={() => setPendingDeleteId(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className="quiet-button remove-button"
-                onClick={confirmDelete}
-              >
-                Delete character
-              </button>
-            </div>
-          </div>
         </div>
       )}
       {pendingPDF && (

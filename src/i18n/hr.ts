@@ -85,6 +85,8 @@ export const croatianTranslations: Record<string, string> = {
   Recommended: "Preporučeno",
   "May need review": "Možda zahtijeva provjeru",
   "Delete character": "Izbriši lika",
+  "Click again to confirm": "Kliknite ponovno za potvrdu",
+  "Character deleted": "Lik je izbrisan",
   "Open character": "Otvori lika",
   "This removes the character from this browser. Exported files are unchanged.":
     "Lik se uklanja iz ovog preglednika. Izvezene datoteke ostaju sačuvane.",

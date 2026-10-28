@@ -164,3 +164,13 @@ This pass supersedes the earlier continuation-page export described above, follo
 - Removed the illustrated-card duplicate outline and reflection inset rim shadows. Gloss layers now clip inside the rounded border. Static corner inspection cannot establish that every GPU/zoom combination is artifact-free.
 - TypeScript and production build pass. No regression suite was run for this focused motion correction. Saved character data was not used or modified by the isolated preview.
 
+# Inline saved-character deletion — 28 October 2026
+
+- Replaced the delete dialog with one armed trash button, a continuous red T-shaped outline, EN/HR confirmation text, and Escape/outside-click dismissal. Clicking the text leaves the confirmation armed; switching trash buttons arms only the new target.
+- The prompt is portalled outside the scrolling mask, clamps to narrow screens, follows scrolling, and hides when its icon leaves the visible panel. Inspected a 375 px Croatian layout and a 1024 × 480 desktop scroller.
+- Persistence succeeds before the card becomes an exiting visual copy. Simulated storage failure kept the character, disarmed confirmation, displayed the storage warning, and created no burn. Active-character and only-character deletion survived reload without resurrection; an empty list returned focus to its heading.
+- After visual feedback, replaced the custom flames with DuckDuckGo's unmodified original Lottie asset. Its source revision and Apache-2.0 license are bundled in `public/animations/`. Static native-asset frames were inspected at frames 6, 12, 18 and 23. Playback uses an on-demand canvas-only player and progressively blackens the card beneath the original flames.
+- Recorded the playing, charred and fading phases. The player canvas was removed after completion. A disposable-page observer detected three native card repositioning animations after removal; the saved-panel heading retained its position.
+- Simulated reduced motion used no player canvas, no icon pulse, and a short fade. The CSS reduced-motion rules were activated in the isolated fixture rather than changing the operating system setting.
+- TypeScript and production build pass. No automated test suite was run. Browser inspection used disposable data only at port 5178; the user's port-5176 character library was not modified.
+
