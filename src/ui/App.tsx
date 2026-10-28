@@ -65,8 +65,10 @@ export function App({
     initialScreen,
   );
   const [entrance, setEntrance] = useState(false);
+  const [returning, setReturning] = useState(false);
   const [importing, setImporting] = useState(false);
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnTransition = useRef<(() => void) | null>(null);
   const [c, setC] = useState<Character>(
     () =>
       boot.library.entries.find((entry) => entry.id === boot.library.activeId)
@@ -143,7 +145,12 @@ export function App({
     updateLocale(language);
   };
   const enterBuilder = () => {
-    if (screen === "builder" || transitionTimer.current !== null) return;
+    if (
+      screen === "builder" ||
+      transitionTimer.current !== null ||
+      returnTransition.current
+    )
+      return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setScreen("builder");
       return;
@@ -159,6 +166,7 @@ export function App({
     () => () => {
       if (transitionTimer.current !== null)
         clearTimeout(transitionTimer.current);
+      returnTransition.current?.();
     },
     [],
   );
@@ -252,6 +260,7 @@ export function App({
       confirmed: prev.confirmed.filter((n) => n < (patch.stage ?? prev.stage)),
     }));
   const go = (stage: number, onComplete?: () => void) => {
+    if (returnTransition.current) return;
     setEntrance(false);
     const target = Math.max(0, Math.min(8, stage));
     if (target === c.stage) {
@@ -273,7 +282,7 @@ export function App({
     );
   };
   const confirmStage = () => {
-    if (errs.length || motion.busy) return;
+    if (errs.length || motion.busy || returnTransition.current) return;
     setEntrance(false);
     void motion.navigate(() => {
       setFurthest(Math.max(furthest, c.stage + 1));
@@ -334,11 +343,97 @@ export function App({
     enterBuilder();
   };
   const showWelcome = (view: "actions" | "saved" = "actions") => {
-    motion.cancel();
+    if (
+      screen !== "builder" ||
+      returnTransition.current ||
+      transitionTimer.current !== null ||
+      importing
+    )
+      return;
     commitLibrary(saveCurrent());
-    setWelcomeView(view);
+    motion.cancel();
     setEntrance(false);
-    setScreen("welcome");
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const root = appRoot.current;
+    const groups = Array.from(
+      root?.querySelectorAll<HTMLElement>(
+        ":scope > .progress-rail, :scope > .stage-heading, :scope > .stage-panel, :scope > .bottom-navigation, :scope > .page-footnote, :scope > .toast",
+      ) || [],
+    );
+    const blocked = [...groups];
+    const toolbar = root?.querySelector<HTMLElement>(".header-right");
+    if (toolbar) blocked.push(toolbar);
+    const previousInert = blocked.map((node) => node.inert);
+    const animations: Animation[] = [];
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      finished = true;
+      clearTimeout(timer);
+      preference.removeEventListener("change", changed);
+      animations.forEach((animation) => animation.cancel());
+      blocked.forEach((node, index) => {
+        node.inert = previousInert[index];
+      });
+      returnTransition.current = null;
+    };
+    const finish = () => {
+      if (finished) return;
+      cleanup();
+      setReturning(false);
+      setWelcomeView(view);
+      // Unmounting the builder mounts a fresh welcome scene, replaying its
+      // existing letter/description entrances without remounting the logo.
+      setScreen("welcome");
+    };
+    const changed = () => {
+      if (preference.matches) finish();
+    };
+    returnTransition.current = cleanup;
+    if (preference.matches || !root || typeof root.animate !== "function") {
+      finish();
+      return;
+    }
+    setReturning(true);
+    blocked.forEach((node) => {
+      node.inert = true;
+    });
+    root
+      .querySelectorAll("[data-spotlight], [data-click-wave]")
+      .forEach((node) => {
+        node.removeAttribute("data-spotlight");
+        node.removeAttribute("data-click-wave");
+      });
+    const visible = groups.filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.top < innerHeight
+      );
+    });
+    visible.forEach((node) => {
+      const direction = node.matches(
+        ".stage-heading, .bottom-navigation, .page-footnote",
+      )
+        ? -1
+        : 1;
+      animations.push(
+        node.animate(
+          [
+            { opacity: 1, transform: "translate(0, 0)" },
+            { opacity: 0, transform: `translate(${direction * 18}px, -4px)` },
+          ],
+          { duration: 200, easing: "ease-in", fill: "forwards" },
+        ),
+      );
+    });
+    preference.addEventListener("change", changed);
+    timer = setTimeout(finish, 280);
+    void Promise.allSettled(
+      animations.map((animation) => animation.finished),
+    ).then(finish);
   };
   const showSaved = () => showWelcome("saved");
   const deleteSaved = (id: string): boolean => {
@@ -385,6 +480,7 @@ export function App({
     [library, locale, screen],
   );
   const resetStage = () => {
+    if (returnTransition.current) return;
     if (!window.confirm(t("Reset the choices in this stage?"))) return;
     const next = { ...c };
     const base = initialCharacter();
@@ -742,8 +838,10 @@ export function App({
   );
   return (
     <main
-      className={`app-shell ${screen !== "builder" ? "welcome-shell" : entrance ? "builder-entering" : ""}`}
+      className={`app-shell ${screen !== "builder" ? "welcome-shell" : entrance && !returning ? "builder-entering" : ""}`}
       ref={appRoot}
+      aria-busy={returning || undefined}
+      data-screen-phase={returning ? "returning" : undefined}
     >
       <header
         className={`top-header site-header ${screen !== "builder" ? "is-welcome" : ""}`}
@@ -760,7 +858,7 @@ export function App({
             key="language"
             locale={locale}
             onChange={changeLocale}
-            disabled={screen === "leaving" || importing}
+            disabled={screen === "leaving" || returning || importing}
           />
           {screen === "builder" && (
             <CharacterActions>
@@ -833,7 +931,7 @@ export function App({
                 key={label}
                 className={`progress-step ${index === c.stage ? "current" : ""} ${c.confirmed.includes(index) ? "done" : ""}`}
                 aria-current={index === c.stage ? "step" : undefined}
-                disabled={index > furthest || motion.busy}
+                disabled={index > furthest || motion.busy || returning}
                 onClick={() => go(index)}
               >
                 <span className="progress-top" />
@@ -874,7 +972,7 @@ export function App({
           <section
             className="stage-panel"
             ref={stagePanel}
-            aria-busy={motion.busy || undefined}
+            aria-busy={motion.busy || returning || undefined}
             data-motion-phase={
               motion.phase === "idle" ? undefined : motion.phase
             }
@@ -1001,7 +1099,7 @@ export function App({
           <footer className="bottom-navigation">
             <button
               className="nav-button back-button"
-              disabled={motion.busy}
+              disabled={motion.busy || returning}
               onClick={() => (c.stage === 0 ? showWelcome() : go(c.stage - 1))}
             >
               ← BACK
@@ -1009,7 +1107,7 @@ export function App({
             <button
               className="nav-button reset-button"
               onClick={resetStage}
-              disabled={motion.busy}
+              disabled={motion.busy || returning}
             >
               RESET THIS STAGE
             </button>
@@ -1017,7 +1115,9 @@ export function App({
               className="nav-button confirm-button"
               onClick={c.stage === 8 ? exportPDF : confirmStage}
               disabled={
-                motion.busy || (c.stage === 8 ? !sheetReady : errs.length > 0)
+                motion.busy ||
+                returning ||
+                (c.stage === 8 ? !sheetReady : errs.length > 0)
               }
             >
               {c.stage === 8 ? "EXPORT FILLABLE PDF" : "CONFIRM & CONTINUE"} →

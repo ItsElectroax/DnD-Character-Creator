@@ -320,22 +320,117 @@ function prepareOriginalFire() {
 }
 
 function CardBurn({
+  active,
   onStart,
   onComplete,
+  onError,
 }: {
+  active: boolean;
   onStart: () => void;
   onComplete: () => void;
+  onError: () => void;
 }) {
   const container = useRef<HTMLSpanElement>(null);
-  const callbacks = useRef({ onStart, onComplete });
-  callbacks.current = { onStart, onComplete };
+  const char = useRef<HTMLCanvasElement>(null);
+  const activePlayback = useRef(active);
+  activePlayback.current = active;
+  const callbacks = useRef({ onStart, onComplete, onError });
+  callbacks.current = { onStart, onComplete, onError };
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (
+      !active ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
     let cancelled = false;
+    let completed = false;
+    let started = false;
+    let lastFrame = -1;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     let animation: import("lottie-web").AnimationItem | undefined;
+    const finish = (failed = false) => {
+      if (cancelled || completed || !activePlayback.current) return;
+      completed = true;
+      clearTimeout(watchdog);
+      animation?.pause();
+      if (failed) callbacks.current.onError();
+      else callbacks.current.onComplete();
+    };
+    const watch = () => {
+      clearTimeout(watchdog);
+      if (!document.hidden && !completed)
+        watchdog = setTimeout(() => finish(true), 4000);
+    };
+    const visibility = () => {
+      if (!started || completed || !activePlayback.current) return;
+      if (document.hidden) {
+        clearTimeout(watchdog);
+        animation?.pause();
+      } else {
+        watch();
+        animation?.play();
+      }
+    };
+    document.addEventListener("visibilitychange", visibility);
+    // Accumulate only flame pixels already drawn. A separate timed rectangle
+    // can outrun the fire, especially on a throttled tab or a slow frame.
+    const blacken = (
+      event: Pick<import("lottie-web").BMEnterFrameEvent, "currentTime">,
+    ) => {
+      if (cancelled || completed || !activePlayback.current) return;
+      try {
+        const source = container.current?.querySelector("canvas");
+        const mask = char.current;
+        if (!source || !mask || !source.width || !source.height) return;
+        const resized =
+          mask.width !== source.width || mask.height !== source.height;
+        if (!resized && lastFrame === event.currentTime) return;
+        const context = mask.getContext("2d");
+        if (!context) return finish(true);
+        if (resized) {
+          const previous = document.createElement("canvas");
+          previous.width = mask.width;
+          previous.height = mask.height;
+          const previousContext = previous.getContext("2d");
+          if (!previousContext) return finish(true);
+          previousContext.drawImage(mask, 0, 0);
+          mask.width = source.width;
+          mask.height = source.height;
+          context.drawImage(previous, 0, 0, mask.width, mask.height);
+        }
+        context.globalCompositeOperation = "source-over";
+        context.drawImage(source, 0, 0);
+        context.globalCompositeOperation = "source-in";
+        context.fillStyle = "#000";
+        context.fillRect(0, 0, mask.width, mask.height);
+        context.globalCompositeOperation = "source-over";
+        lastFrame = event.currentTime;
+        watch();
+      } catch {
+        finish(true);
+      }
+    };
+    const resize = new ResizeObserver(() => {
+      try {
+        if (
+          started &&
+          !completed &&
+          !cancelled &&
+          activePlayback.current &&
+          animation
+        ) {
+          animation.resize();
+          // resize() redraws directly without emitting drawnFrame.
+          blacken({ currentTime: animation.currentFrame });
+        }
+      } catch {
+        finish(true);
+      }
+    });
+    if (container.current) resize.observe(container.current);
     void prepareOriginalFire()
       .then(({ player, data }) => {
-        if (cancelled || !container.current) return;
+        if (cancelled || !activePlayback.current || !container.current) return;
         animation = player.loadAnimation({
           container: container.current,
           renderer: "canvas",
@@ -349,36 +444,34 @@ function CardBurn({
           },
         });
         animation.setSubframe(false);
-        let started = false;
         const start = () => {
-          if (cancelled || started || !animation) return;
+          if (cancelled || started || !activePlayback.current || !animation)
+            return;
           started = true;
           callbacks.current.onStart();
+          watch();
           animation.goToAndPlay(0, true);
+          visibility();
         };
         animation.addEventListener("DOMLoaded", start);
-        animation.addEventListener("complete", () => {
-          if (!cancelled) callbacks.current.onComplete();
-        });
-        animation.addEventListener("data_failed", () => {
-          if (!cancelled) callbacks.current.onComplete();
-        });
-        animation.addEventListener("error", () => {
-          if (!cancelled) callbacks.current.onComplete();
-        });
+        animation.addEventListener("drawnFrame", blacken);
+        animation.addEventListener("complete", () => finish());
+        animation.addEventListener("data_failed", () => finish(true));
+        animation.addEventListener("error", () => finish(true));
         if (animation.isLoaded) start();
       })
-      .catch(() => {
-        if (!cancelled) callbacks.current.onComplete();
-      });
+      .catch(() => finish(true));
     return () => {
       cancelled = true;
+      clearTimeout(watchdog);
+      resize.disconnect();
+      document.removeEventListener("visibilitychange", visibility);
       animation?.destroy();
     };
-  }, []);
+  }, [active]);
   return (
     <span className="saved-character-burn" aria-hidden="true">
-      <span className="card-burn-char" />
+      <canvas className="card-burn-char" ref={char} width={1} height={1} />
       <span className="card-burn-original" ref={container} />
     </span>
   );
@@ -417,6 +510,15 @@ export function WelcomeScreen({
   const optionsTitle = useRef<HTMLHeadingElement>(null);
   const savedTitle = useRef<HTMLHeadingElement>(null);
   const savedList = useRef<HTMLDivElement>(null);
+  const startPanel = useRef<HTMLElement>(null);
+  const panelAnimations = useRef<Animation[]>([]);
+  const panelRevision = useRef(0);
+  const panelBusy = useRef(false);
+  const panelExitCleanup = useRef<(() => void) | null>(null);
+  const firstPanelEntry = useRef(true);
+  const [panelPhase, setPanelPhase] = useState<"idle" | "entering" | "exiting">(
+    "idle",
+  );
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
   const burnLock = useRef(false);
   const finishBurn = useRef<(() => void) | null>(null);
@@ -442,6 +544,89 @@ export function WelcomeScreen({
     });
   }, []);
   useEffect(() => setView(initialView), [initialView]);
+  const panelTargets = () => {
+    const panel = startPanel.current;
+    if (!panel) return [];
+    const list = savedList.current?.getBoundingClientRect();
+    return Array.from(
+      panel.querySelectorAll<HTMLElement>(
+        ":scope > .eyebrow, :scope > h2, .welcome-option-entry, .saved-character-heading .eyebrow, .saved-character-heading h2, .saved-character-back, .saved-character-card, .saved-character-empty",
+      ),
+    ).filter((target) => {
+      if (!target.matches(".saved-character-card")) return true;
+      const rect = target.getBoundingClientRect();
+      return (
+        rect.bottom > Math.max(0, list?.top ?? 0) &&
+        rect.top < Math.min(innerHeight, list?.bottom ?? innerHeight)
+      );
+    });
+  };
+  useLayoutEffect(() => {
+    const panel = startPanel.current;
+    if (!panel) return;
+    const ticket = ++panelRevision.current;
+    const intro = firstPanelEntry.current;
+    firstPanelEntry.current = false;
+    panelAnimations.current.forEach((animation) => animation.cancel());
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (panelRevision.current !== ticket || finished) return;
+      finished = true;
+      clearTimeout(timer);
+      panelAnimations.current.forEach((animation) => animation.cancel());
+      panelAnimations.current = [];
+      panelBusy.current = false;
+      panel.inert = false;
+      setPanelPhase("idle");
+      if (!intro || view === "saved")
+        (view === "saved" ? savedTitle.current : optionsTitle.current)?.focus({
+          preventScroll: true,
+        });
+    };
+    panelBusy.current = true;
+    panel.inert = true;
+    setPanelPhase("entering");
+    if (preference.matches || typeof panel.animate !== "function") {
+      finish();
+      return () => {
+        panelRevision.current++;
+        panelExitCleanup.current?.();
+      };
+    }
+    panelAnimations.current = panelTargets().map((target, index) =>
+      target.animate(
+        [
+          { opacity: 0, transform: "translateX(24px)" },
+          { opacity: 1, transform: "translateX(0)" },
+        ],
+        {
+          duration: 360,
+          delay: (intro ? 450 : 0) + Math.min(index * 40, 240),
+          easing: "cubic-bezier(.16,1,.3,1)",
+          fill: "both",
+        },
+      ),
+    );
+    timer = setTimeout(finish, intro ? 1150 : 700);
+    void Promise.allSettled(
+      panelAnimations.current.map((animation) => animation.finished),
+    ).then(finish);
+    const changed = () => {
+      if (preference.matches) finish();
+    };
+    preference.addEventListener("change", changed);
+    return () => {
+      panelRevision.current++;
+      panelExitCleanup.current?.();
+      clearTimeout(timer);
+      preference.removeEventListener("change", changed);
+      panelAnimations.current.forEach((animation) => animation.cancel());
+      panelAnimations.current = [];
+      panel.inert = false;
+    };
+  }, [view]);
   useEffect(() => {
     if (view !== "saved") return;
     const list = savedList.current;
@@ -496,7 +681,8 @@ export function WelcomeScreen({
     [],
   );
   useEffect(() => {
-    if (!burn || view !== "saved" || leaving) return;
+    if (!burn || view !== "saved" || leaving || panelPhase === "exiting")
+      return;
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     let finished = false;
     const finish = () => {
@@ -517,30 +703,33 @@ export function WelcomeScreen({
       burnLock.current = false;
     };
     finishBurn.current = finish;
-    // Player completion and the final fade own the normal sequence. These
-    // bounded fallbacks also finish if a tab is hidden or an asset fails.
+    // Playback owns its frame/stall clock. Only loading and the final fade
+    // need a screen-level fallback; neither may force a black rectangle.
     const delay =
       burn.phase === "loading"
         ? 4000
         : burn.phase === "playing"
-          ? 2600
+          ? null
           : burn.phase === "charred"
             ? 120
             : preference.matches
               ? 240
               : 360;
-    const timer = window.setTimeout(() => {
-      if (burn.phase === "fading") finish();
-      else
-        setBurn((current) =>
-          current
-            ? {
-                ...current,
-                phase: burn.phase === "charred" ? "fading" : "charred",
-              }
-            : current,
-        );
-    }, delay);
+    const timer =
+      delay === null
+        ? undefined
+        : window.setTimeout(() => {
+            if (burn.phase === "fading") finish();
+            else
+              setBurn((current) =>
+                current
+                  ? {
+                      ...current,
+                      phase: "fading",
+                    }
+                  : current,
+              );
+          }, delay);
     const changed = () => {
       if (preference.matches)
         setBurn((current) =>
@@ -553,7 +742,7 @@ export function WelcomeScreen({
       clearTimeout(timer);
       preference.removeEventListener("change", changed);
     };
-  }, [burn, view, leaving]);
+  }, [burn, view, leaving, panelPhase]);
   useLayoutEffect(() => {
     if (burn || focusAfterDelete.current === null) return;
     const index = focusAfterDelete.current;
@@ -610,13 +799,49 @@ export function WelcomeScreen({
     else focus();
   }, [burn, savedCharacters]);
   const changeView = (next: "actions" | "saved") => {
+    if (panelBusy.current || leaving || loading || view === next) return;
     setArmedId(null);
-    setView(next);
-    requestAnimationFrame(() =>
-      (next === "saved" ? savedTitle.current : optionsTitle.current)?.focus({
-        preventScroll: true,
-      }),
-    );
+    const panel = startPanel.current;
+    if (!panel) return;
+    const ticket = ++panelRevision.current;
+    panelBusy.current = true;
+    panel.inert = true;
+    setPanelPhase("exiting");
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      preference.removeEventListener("change", changed);
+      panelExitCleanup.current = null;
+    };
+    const finish = () => {
+      if (finished || panelRevision.current !== ticket) return;
+      finished = true;
+      cleanup();
+      setView(next);
+    };
+    const changed = () => {
+      if (preference.matches) finish();
+    };
+    panelExitCleanup.current = cleanup;
+    if (!preference.matches && typeof panel.animate === "function") {
+      panelAnimations.current = panelTargets().map((target) =>
+        target.animate(
+          [{ opacity: getComputedStyle(target).opacity }, { opacity: 0 }],
+          {
+            duration: 160,
+            easing: "ease-in",
+            fill: "forwards",
+          },
+        ),
+      );
+      preference.addEventListener("change", changed);
+      timer = setTimeout(finish, 240);
+      void Promise.allSettled(
+        panelAnimations.current.map((animation) => animation.finished),
+      ).then(finish);
+    } else finish();
   };
   const keepFocusedCardVisible = (target: EventTarget) => {
     if (reflowing.current || burnLock.current) return;
@@ -635,7 +860,14 @@ export function WelcomeScreen({
       list.scrollTop += item.bottom - bounds.bottom + gutter;
   };
   const deleteCharacter = (character: SavedCharacterSummary, index: number) => {
-    if (burnLock.current || loading || leaving) return;
+    if (
+      burnLock.current ||
+      panelBusy.current ||
+      reflowing.current ||
+      loading ||
+      leaving
+    )
+      return;
     if (armedId !== character.id) {
       setArmedId(character.id);
       if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
@@ -773,6 +1005,9 @@ export function WelcomeScreen({
         </section>
         <section
           className="welcome-start"
+          ref={startPanel}
+          data-panel-phase={panelPhase}
+          aria-busy={panelPhase !== "idle" || undefined}
           aria-labelledby={
             view === "saved"
               ? "saved-characters-title"
@@ -931,6 +1166,11 @@ export function WelcomeScreen({
                         </button>
                         {burn?.character.id === character.id && (
                           <CardBurn
+                            active={
+                              panelPhase !== "exiting" &&
+                              (burn.phase === "loading" ||
+                                burn.phase === "playing")
+                            }
                             onStart={() =>
                               setBurn((current) =>
                                 current?.phase === "loading"
@@ -944,6 +1184,13 @@ export function WelcomeScreen({
                                 (current.phase === "loading" ||
                                   current.phase === "playing")
                                   ? { ...current, phase: "charred" }
+                                  : current,
+                              )
+                            }
+                            onError={() =>
+                              setBurn((current) =>
+                                current
+                                  ? { ...current, phase: "fading" }
                                   : current,
                               )
                             }
