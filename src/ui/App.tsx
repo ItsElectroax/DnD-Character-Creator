@@ -99,7 +99,12 @@ export function App({
   const heading = useRef<HTMLHeadingElement>(null);
   const appRoot = useRef<HTMLElement>(null);
   const stagePanel = useRef<HTMLElement>(null);
-  const motion = useStageMotion(c.stage, stagePanel, heading);
+  const motion = useStageMotion(
+    c.stage,
+    stagePanel,
+    heading,
+    screen === "builder",
+  );
   useCursorSpotlight(appRoot, c.stage, screen);
   const rawRecovery = () => getRawLibraryRecovery() ?? getRawDraftRecovery();
   const downloadRecoveries = () => {

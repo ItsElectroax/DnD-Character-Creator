@@ -364,91 +364,340 @@ export function useCursorSpotlight(
   }, [root, stage, surface]);
 }
 
-const motionTargets = [
-  ".choice-card",
-  ".skill-option",
-  ".language-choice",
-  ".check-row",
+// Animate a labelled field or readable row as one unit. Layout-only wrappers
+// recurse into their contents, so a new panel cannot hide its headings/controls
+// from the shared transition. Decorative lighting/artwork is never a target.
+const stageUnits = [
+  "button",
+  "label",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "li",
+  "dl:not(.audit-list)",
   ".field",
   ".section-title",
-  ".detail-panel",
-  ".sheet-card",
+  ".panel-kicker",
+  ".rules-strip",
+  ".validation-banner",
+  ".pdf-bridge",
+  ".sheet-identity",
   ".ability-row",
+  ".ability-table-head",
   ".path-row",
+  ".path-heading",
   ".pick-summary",
   ".selected-summary",
-  ".rules-strip",
+  ".point-buy-meter",
+  ".level-badge",
   ".race-facts > div",
   ".race-trait-list > div",
-  ".generated-feature-list > details",
-  ".feature-group",
+  ".tool-training-list > div",
+  ".class-choice-header",
+  ".spellcasting-profile",
+  ".automatic-ac-control",
+  ".sheet-card-head",
+  ".combat-stats > div",
+  ".ability-score",
+  ".stat-wheel-wrap",
+  ".compact-list > div",
+  ".audit-list > div",
   ".story-fields > div",
   ".attack-list > div",
+  ".attack-note",
+  ".level-entry-list > div",
+  ".override-list > div",
 ].join(",");
 
-function visibleTargets(panel: HTMLElement) {
-  const candidates = Array.from(
-    panel.querySelectorAll<HTMLElement>(motionTargets),
-  ).filter((element) => {
-    const closed = element.closest("details:not([open])");
-    if (closed && closed !== element) return false;
-    const rect = element.getBoundingClientRect();
-    return (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      rect.bottom > 0 &&
-      rect.top < innerHeight
-    );
-  });
-  // Move each choice once, rather than moving both it and its parent panel.
-  return candidates
-    .filter(
-      (parent) =>
-        !candidates.some((child) => parent !== child && parent.contains(child)),
+function stageTargets(panel: HTMLElement) {
+  const targets: HTMLElement[] = [];
+  const visit = (element: HTMLElement) => {
+    if (
+      element.matches(
+        "[hidden], [aria-hidden='true'], .sr-only, input[type='hidden'], script, style",
+      )
     )
-    .sort((a, b) => {
-      const first = a.getBoundingClientRect(),
-        second = b.getBoundingClientRect();
-      return Math.abs(first.top - second.top) > 12
-        ? first.top - second.top
-        : first.left - second.left;
-    })
-    .slice(0, 32);
+      return;
+    if (element.matches("details:not([open])") || element.matches(stageUnits)) {
+      targets.push(element);
+      return;
+    }
+    const before = targets.length;
+    for (const child of element.children) {
+      if (child instanceof HTMLElement) visit(child);
+    }
+    // Include plain text/status blocks without requiring a new class each time.
+    if (before === targets.length && element.textContent?.trim())
+      targets.push(element);
+  };
+  for (const child of panel.children) {
+    if (child instanceof HTMLElement) visit(child);
+  }
+  return targets;
 }
 
-function animateChoices(panel: HTMLElement, entering: boolean) {
-  const targets = visibleTargets(panel);
-  if (!targets.length)
-    targets.push(panel.querySelector<HTMLElement>(".stage-body") || panel);
+type StageTarget = {
+  element: HTMLElement;
+  rect: DOMRect;
+  horizontalRoom: number;
+};
+
+function measureStageTargets(
+  panel: HTMLElement,
+  targets = stageTargets(panel),
+) {
+  const bounds = new Map<
+    HTMLElement,
+    {
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+      scrolls: boolean;
+    }
+  >();
+  return targets
+    .flatMap((element): StageTarget[] => {
+      const rect = element.getBoundingClientRect();
+      if (
+        !rect.width ||
+        !rect.height ||
+        rect.bottom <= 0 ||
+        rect.top >= innerHeight
+      )
+        return [];
+      let horizontalRoom = Math.max(
+        0,
+        Math.min(24, document.documentElement.clientWidth - rect.right - 2),
+      );
+      for (
+        let parent = element.parentElement;
+        parent && parent !== panel.parentElement;
+        parent = parent.parentElement
+      ) {
+        let bound = bounds.get(parent);
+        if (!bound) {
+          const style = getComputedStyle(parent);
+          const clips = /(auto|scroll|hidden|clip)/.test(
+            `${style.overflowX} ${style.overflowY}`,
+          );
+          const box = parent.getBoundingClientRect();
+          bound = {
+            top: clips ? box.top : -Infinity,
+            bottom: clips ? box.bottom : Infinity,
+            left: clips ? box.left : -Infinity,
+            right: clips ? box.right : Infinity,
+            scrolls: /(auto|scroll)/.test(
+              `${style.overflowX} ${style.overflowY}`,
+            ),
+          };
+          bounds.set(parent, bound);
+        }
+        if (
+          rect.bottom <= bound.top ||
+          rect.top >= bound.bottom ||
+          rect.right <= bound.left ||
+          rect.left >= bound.right
+        )
+          return [];
+        // Sliding across a scrollport edge can create a temporary horizontal bar.
+        if (bound.scrolls) horizontalRoom = 0;
+      }
+      return [{ element, rect, horizontalRoom }];
+    })
+    .sort((a, b) =>
+      Math.abs(a.rect.top - b.rect.top) > 12
+        ? a.rect.top - b.rect.top
+        : a.rect.left - b.rect.left,
+    );
+}
+
+function stageAnimation(target: StageTarget, entering: boolean, delay: number) {
+  const opacity = getComputedStyle(target.element).opacity;
+  return target.element.animate(
+    entering
+      ? [
+          { opacity: 0, translate: `${target.horizontalRoom}px 12px` },
+          { opacity, translate: "none" },
+        ]
+      : [
+          { opacity, translate: "none" },
+          { opacity: 0, translate: `${-target.horizontalRoom}px -3px` },
+        ],
+    {
+      duration: entering ? 360 : 210,
+      delay,
+      easing: entering
+        ? "cubic-bezier(.16,1,.3,1)"
+        : "cubic-bezier(.55,0,1,.45)",
+      fill: entering ? "backwards" : "forwards",
+    },
+  );
+}
+
+function staggerTargets(targets: StageTarget[], entering: boolean) {
   let row = -1,
     lastTop = -Infinity;
   return targets.map((target) => {
-    const top = target.getBoundingClientRect().top;
-    if (Math.abs(top - lastTop) > 16) {
+    if (Math.abs(target.rect.top - lastTop) > 16) {
       row++;
-      lastTop = top;
+      lastTop = target.rect.top;
     }
-    const delay = Math.min(row, entering ? 6 : 5) * (entering ? 45 : 32);
-    return target.animate(
-      entering
-        ? [
-            { opacity: 0, transform: "translate3d(64px, 14px, 0)" },
-            { opacity: 1, transform: "translate3d(0, 0, 0)" },
-          ]
-        : [
-            { opacity: 1, transform: "translate3d(0, 0, 0)" },
-            { opacity: 0, transform: "translate3d(-88px, -3px, 0)" },
-          ],
-      {
-        duration: entering ? 360 : 210,
-        delay,
-        easing: entering
-          ? "cubic-bezier(.16,1,.3,1)"
-          : "cubic-bezier(.55,0,1,.45)",
-        fill: entering ? "backwards" : "forwards",
-      },
+    return stageAnimation(
+      target,
+      entering,
+      Math.min(row * (entering ? 40 : 32), entering ? 240 : 160),
     );
   });
+}
+
+/** One entrance per content unit per visit, including scrollports and new choices. */
+function stageEntrance(panel: HTMLElement) {
+  const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const seen = new WeakSet<HTMLElement>();
+  const pending = new Set<HTMLElement>();
+  const running = new Map<HTMLElement, Animation>();
+  let stopped = false,
+    frame = 0;
+  const forget = (element: HTMLElement) => {
+    seen.add(element);
+    pending.delete(element);
+    intersection?.unobserve(element);
+  };
+  const reveal = (targets: StageTarget[]) => {
+    const fresh = targets.filter(({ element }) => !seen.has(element));
+    fresh.forEach(({ element }) => forget(element));
+    if (preference.matches || typeof panel.animate !== "function") return [];
+    // A focused or actively edited field should never start moving underneath
+    // the keyboard/pointer when conditional content is inserted around it.
+    const ready = fresh.filter(
+      ({ element }) => !element.contains(document.activeElement),
+    );
+    const animations = staggerTargets(ready, true);
+    animations.forEach((animation, index) => {
+      const element = ready[index].element;
+      running.set(element, animation);
+      void animation.finished
+        .catch(() => {})
+        .then(() => {
+          if (running.get(element) === animation) running.delete(element);
+          animation.cancel();
+        });
+    });
+    return animations;
+  };
+  const intersection =
+    typeof IntersectionObserver === "function"
+      ? new IntersectionObserver((entries) => {
+          if (stopped) return;
+          const visible = entries
+            .filter((entry) => entry.isIntersecting)
+            .map((entry) => entry.target as HTMLElement);
+          reveal(measureStageTargets(panel, visible));
+        })
+      : null;
+  const scan = () => {
+    frame = 0;
+    if (stopped) return [];
+    const targets = stageTargets(panel);
+    const current = new Set(targets);
+    const added: HTMLElement[] = [];
+    for (const element of pending) {
+      if (!current.has(element)) {
+        pending.delete(element);
+        intersection?.unobserve(element);
+      }
+    }
+    for (const [element, animation] of running) {
+      if (!panel.contains(element)) {
+        animation.cancel();
+        running.delete(element);
+      }
+    }
+    for (const element of targets) {
+      if (seen.has(element)) continue;
+      if (preference.matches) {
+        forget(element);
+        continue;
+      }
+      if (!pending.has(element)) {
+        pending.add(element);
+        intersection?.observe(element);
+        added.push(element);
+      }
+    }
+    // Existing offscreen units are already watched by the observer. Editing
+    // text must not remeasure an entire spell catalogue on every keystroke.
+    return reveal(
+      measureStageTargets(
+        panel,
+        intersection ? added : targets.filter((element) => !seen.has(element)),
+      ),
+    );
+  };
+  const schedule = () => {
+    if (!stopped && !frame) frame = requestAnimationFrame(scan);
+  };
+  const mutation = new MutationObserver(schedule);
+  // Value/text updates and hover classes do not replay entrances. Only actual
+  // new content and accordion visibility need a rescan; work is frame-batched.
+  mutation.observe(panel, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["open", "hidden"],
+  });
+  const focus = () => {
+    for (const element of pending)
+      if (element.contains(document.activeElement)) forget(element);
+    for (const [element, animation] of running) {
+      if (element.contains(document.activeElement)) {
+        animation.cancel();
+        running.delete(element);
+      }
+    }
+  };
+  const preferenceChanged = () => {
+    if (preference.matches) {
+      running.forEach((animation) => animation.cancel());
+      running.clear();
+    }
+    scan();
+  };
+  preference.addEventListener("change", preferenceChanged);
+  panel.addEventListener("focusin", focus);
+  // Native details visibility is also signalled without a child insertion.
+  panel.addEventListener("toggle", schedule, true);
+  if (!intersection) {
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+  }
+  const initial = scan();
+  return {
+    initial,
+    stop() {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      mutation.disconnect();
+      intersection?.disconnect();
+      preference.removeEventListener("change", preferenceChanged);
+      panel.removeEventListener("focusin", focus);
+      panel.removeEventListener("toggle", schedule, true);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      running.forEach((animation) => animation.cancel());
+      running.clear();
+      pending.clear();
+    },
+  };
 }
 
 async function settle(animations: Animation[], timeout: number) {
@@ -467,6 +716,7 @@ export function useStageMotion(
   stage: number,
   panel: RefObject<HTMLElement>,
   heading: RefObject<HTMLElement>,
+  enabled = true,
 ) {
   const [phase, setPhase] = useState<"idle" | "exiting" | "entering">("idle");
   const previous = useRef(stage);
@@ -475,8 +725,11 @@ export function useStageMotion(
   const revision = useRef(0);
   const animations = useRef<Animation[]>([]);
   const after = useRef<(() => void) | undefined>();
+  const entrance = useRef<ReturnType<typeof stageEntrance>>();
   const cancel = () => {
     revision.current++;
+    entrance.current?.stop();
+    entrance.current = undefined;
     animations.current.forEach((animation) => animation.cancel());
     animations.current = [];
     busy.current = false;
@@ -484,7 +737,7 @@ export function useStageMotion(
     if (panel.current) panel.current.inert = false;
     if (alive.current) setPhase("idle");
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
@@ -493,7 +746,8 @@ export function useStageMotion(
   }, []);
 
   useLayoutEffect(() => {
-    if (previous.current === stage) return;
+    if (!enabled) return;
+    const changed = previous.current !== stage;
     previous.current = stage;
     animations.current.forEach((animation) => animation.cancel());
     animations.current = [];
@@ -506,10 +760,12 @@ export function useStageMotion(
     // would otherwise select and animate the wrong part of a long stage.
     const scrollBehavior = document.documentElement.style.scrollBehavior;
     document.documentElement.style.scrollBehavior = "auto";
-    heading.current?.focus({ preventScroll: true });
-    heading.current?.scrollIntoView({ block: "start", behavior: "instant" });
+    if (changed) {
+      heading.current?.focus({ preventScroll: true });
+      heading.current?.scrollIntoView({ block: "start", behavior: "instant" });
+    }
     document.documentElement.style.scrollBehavior = scrollBehavior;
-    const ticket = revision.current;
+    const ticket = ++revision.current;
     const finish = () => {
       if (!alive.current || revision.current !== ticket) return;
       animations.current.forEach((animation) => animation.cancel());
@@ -521,17 +777,23 @@ export function useStageMotion(
       after.current = undefined;
       callback?.();
     };
-    if (reducedMotion() || typeof node.animate !== "function") return finish();
+    entrance.current = stageEntrance(node);
+    if (reducedMotion() || !entrance.current.initial.length) {
+      finish();
+      return () => entrance.current?.stop();
+    }
     busy.current = true;
     node.inert = true;
     setPhase("entering");
-    animations.current = animateChoices(node, true);
+    animations.current = entrance.current.initial;
     void settle(animations.current, 800).then(finish);
-  }, [stage, panel, heading]);
+    return () => entrance.current?.stop();
+  }, [stage, panel, heading, enabled]);
 
   const navigate = async (commit: () => void, onComplete?: () => void) => {
     if (busy.current) return;
     busy.current = true;
+    entrance.current?.stop();
     const ticket = ++revision.current;
     after.current = onComplete;
     const node = panel.current;
@@ -544,7 +806,7 @@ export function useStageMotion(
         });
       node.inert = true;
       setPhase("exiting");
-      animations.current = animateChoices(node, false);
+      animations.current = staggerTargets(measureStageTargets(node), false);
       await settle(animations.current, 500);
     }
     if (alive.current && revision.current === ticket) commit();
